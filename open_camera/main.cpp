@@ -226,6 +226,13 @@ int main( int argc, char** argv )
 
 #include <iostream>
 #include <opencv2/opencv.hpp>
+#include <numpy/arrayobject.h>
+#include <string.h>
+#include <sstream>
+#include <Python.h>
+#include <thread>
+#include <cstring>
+#include <time.h>
 // OpenNI Header
 #include <OpenNI.h>
 
@@ -234,14 +241,24 @@ using namespace std;
 using namespace openni;
 using namespace cv;
 
-int main( int argc, char **argv )
-{
+int main( int argc, char **argv ){
+
+
   // 1. Initial OpenNI
   OpenNI::initialize();
   // 2. Open Device
   Device mDevice;
   mDevice.open( ANY_DEVICE );
   openni::Status status;
+
+  Py_Initialize();
+  import_array();
+  PyRun_SimpleString("import sys");
+  PyRun_SimpleString("sys.path.append(\'/root/桌面/work_space/cp-opencv/')");
+
+  PyObject *pModule = PyImport_ImportModule("test_module");
+  PyObject *pDict = PyModule_GetDict(pModule);
+  PyObject *pFunc = PyDict_GetItemString(pDict, "run");
 
 
   // 3. Create depth stream
@@ -266,8 +283,8 @@ int main( int argc, char **argv )
      status=mDevice.setImageRegistrationMode( IMAGE_REGISTRATION_DEPTH_TO_COLOR );
  }
   // 5. create OpenCV Window
-  cv::namedWindow( "Depth Image");
-  cv::namedWindow( "Color Image");
+  //cv::namedWindow( "Depth Image");
+  //cv::namedWindow( "Color Image");
   viz::Viz3d window("window");
   //显示坐标系
   window.showWidget("Coordinate", viz::WCoordinateSystem());
@@ -308,6 +325,50 @@ int main( int argc, char **argv )
         } // 一行结束
       }
 
+      auto sz = cImageBGR.size();
+      int x = sz.width;
+      int y = sz.height;
+      int z = cImageBGR.channels();
+      uchar *CArrays = new uchar[x*y*z];//这一行申请的内存需要释放指针，否则存在内存泄漏的问题
+      int iChannels = cImageBGR.channels();
+      int iRows = cImageBGR.rows;
+      int iCols = cImageBGR.cols * iChannels;
+
+      uchar* p;
+      int id = -1;
+      for (int i = 0; i < iRows; i++)
+      {
+          // get the pointer to the ith row
+          p = cImageBGR.ptr<uchar>(i);
+          // operates on each pixel
+          for (int j = 0; j < iCols; j++)
+          {
+              CArrays[++id] = p[j];//连续空间
+          }
+      }
+      char *point;
+      //cahr *point_add = ' ';
+      string data;
+      npy_intp Dims[3] = { y, x, z}; //注意这个维度数据！
+      PyObject *PyArray = PyArray_SimpleNewFromData(3, Dims, NPY_UBYTE, CArrays);
+      PyObject *ArgArray = PyTuple_New(1);
+      PyTuple_SetItem(ArgArray, 0, PyArray);
+      PyObject *string = PyObject_CallObject(pFunc, ArgArray);
+      PyArg_Parse(string, "s", &point);
+
+      vector<int> boxes;
+      for(int i = 0;i < strlen(point)+1 ;i++)
+      {
+          //cout<< point[i] ;
+          data = data + point[i];
+          if(point[i] == ' '){
+              int a = atoi(data.c_str());
+              boxes.push_back(a);
+              //cout << pointa[j] << " ";
+              data.clear();
+          }
+      }
+
       int height=mImageDepth.rows;
       int width = mImageDepth.cols;
       //创建一个储存point cloud的图片
@@ -324,20 +385,23 @@ int main( int argc, char **argv )
       cv::viz::WCloud cloud(point_cloud,image);
       window.showWidget("cloud",cloud);
 
-      int x = point_cloud.at<Vec3f>(320, 240)[0];
-      int y = point_cloud.at<Vec3f>(320, 240)[1];
-      int z = point_cloud.at<Vec3f>(320, 240)[2];
+      for(int i = 1;i < int(boxes.size())/4 + 1;i++){
+          //cout << boxes[4*i-4] << " " << boxes[4*i-3] << " "<< boxes[4*i-2] << " "<< boxes[4*i-1] << " " ;
+          rectangle(cImageBGR,Point(boxes[4*i-4],boxes[4*i-3]),Point(boxes[4*i-2],boxes[4*i-1]),
+                    Scalar(255, 0, 0),10, LINE_8,0);
+          viz::WCube cube_widget(Point3f(mImageDepth.at<unsigned short>(boxes[4*i-4],boxes[4*i-3])*(boxes[4*i-3] - cx) / fx,
+                                         mImageDepth.at<unsigned short>(boxes[4*i-4],boxes[4*i-3])*(boxes[4*i-4] - cy) / fy,
+                                         mImageDepth.at<unsigned short>(boxes[4*i-4],boxes[4*i-3])),
+                                 Point3f(mImageDepth.at<unsigned short>(boxes[4*i-2],boxes[4*i-1])*(boxes[4*i-1] - cx) / fx,
+                                         mImageDepth.at<unsigned short>(boxes[4*i-2],boxes[4*i-1])*(boxes[4*i-2] - cy) / fy,
+                                         mImageDepth.at<unsigned short>(boxes[4*i-2],boxes[4*i-1])),
+                                 true, viz::Color::green());
+          cube_widget.setRenderingProperty(viz::LINE_WIDTH, 4.0);
+          window.showWidget("Cube Widget", cube_widget);
+      }
 
-      viz::WCube cube_widget(Point3f(200+x,200+y,0.0+z), Point3f(0.0+x,0.0+y,-200+z), true, viz::Color::green());
-      cube_widget.setRenderingProperty(viz::LINE_WIDTH, 4.0);
-      window.showWidget("Cube Widget", cube_widget);
-
-
-      cv::imshow( "Color Image", image);
-      cv::imshow( "Depth Image", mScaledDepth );
       window.spinOnce(1, true);
-
-
+      imshow("cv_show",cImageBGR);
       // 6a. check keyboard
       cv::waitKey( 1 );
   }
